@@ -21,11 +21,13 @@ function generateFileName(url) {
     let route = 'unknown';
     let startDate = 'unknown';
 
+    let cities = ['MOW', 'DXB', 'MRU', 'MOW']; // По умолчанию
     if (match) {
         const [, city1, date1, city2, date2, city3, date3, city4] = match;
         dates = `${date1}-${date2}-${date3}`;
         route = `${city1}-${city2}-${city3}`;
         startDate = date1; // Для отображения в консоли
+        cities = [city1, city2, city3, city4]; // Города из URL
     }
 
     const now = new Date();
@@ -40,7 +42,8 @@ function generateFileName(url) {
         screenshot: `output/as_${dates}_${route}_${timestamp}.png`,
         startDate: startDate,
         dates: dates,
-        route: route
+        route: route,
+        cities: cities // [city1, city2, city3, city4] для маршрутов в Excel
     };
 }
 
@@ -239,31 +242,36 @@ async function parseOnePage(page, searchUrl, isFirstUrl) {
         const d = parseFlightDetails(ticket.rawText || '');
         let matchesCriteria = false;
         if (d) {
-            const seg1Direct = d.seg1_type && d.seg1_type.includes('ПРЯМОЙ');
+            // MOW→MRU: прямой или 1 пересадка
+            const seg1OK = d.seg1_type && (d.seg1_type.includes('ПРЯМОЙ') || d.seg1_type.includes('1 пересадка'));
+            // MRU→DXB: только прямой
             const seg2Direct = d.seg2_type && d.seg2_type.includes('ПРЯМОЙ');
-            const seg3OK = d.seg3_type && (d.seg3_type.includes('ПРЯМОЙ') || d.seg3_type.includes('1 пересадка'));
-            matchesCriteria = seg1Direct && seg2Direct && seg3OK;
+            // DXB→MOW: только прямой
+            const seg3Direct = d.seg3_type && d.seg3_type.includes('ПРЯМОЙ');
+            matchesCriteria = seg1OK && seg2Direct && seg3Direct;
         }
 
+        // Используем города из URL для маршрутов (вместо извлечения из текста)
+        const cities = fileNames.cities;
         return {
             '✓': matchesCriteria ? '✓' : '',
             '№': idx + 1,
             'Цена': ticket.price || '',
-            'Р1': d ? `${d.seg1_from}→${d.seg1_to}` : '',
+            'Р1': `${cities[0]}→${cities[1]}`,
             'Р1 Дата': d ? d.seg1_date_depart : '',
             'Р1 Вылет': d ? d.seg1_depart : '',
             'Р1 Дата2': d ? d.seg1_date_arrive : '',
             'Р1 Прилёт': d ? d.seg1_arrive : '',
             'Р1 Время': d ? d.seg1_duration : '',
             'Р1 Тип': d ? d.seg1_type : '',
-            'Р2': d ? `${d.seg2_from}→${d.seg2_to}` : '',
+            'Р2': `${cities[1]}→${cities[2]}`,
             'Р2 Дата': d ? d.seg2_date_depart : '',
             'Р2 Вылет': d ? d.seg2_depart : '',
             'Р2 Дата2': d ? d.seg2_date_arrive : '',
             'Р2 Прилёт': d ? d.seg2_arrive : '',
             'Р2 Время': d ? d.seg2_duration : '',
             'Р2 Тип': d ? d.seg2_type : '',
-            'Р3': d ? `${d.seg3_from}→${d.seg3_to}` : '',
+            'Р3': `${cities[2]}→${cities[3]}`,
             'Р3 Дата': d ? d.seg3_date_depart : '',
             'Р3 Вылет': d ? d.seg3_depart : '',
             'Р3 Дата2': d ? d.seg3_date_arrive : '',
