@@ -1,0 +1,13 @@
+{
+  "name": "aviasales-parser",
+  "version": "1.0.0",
+  "description": "Parser for Aviasales search results",
+  "main": "aviasales-parser.js",
+  "scripts": {
+    "start": "node aviasales-parser.js"
+  },
+  "dependencies": {
+    "playwright": "^1.58.2",
+    "xlsx": "^0.18.5"
+  }
+}

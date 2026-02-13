@@ -1,0 +1,16 @@
+# Dependencies
+node_modules/
+
+# Output files (too many, not needed in repo)
+output/*.xlsx
+output/*.json
+output/*.png
+
+# Keep example files
+!output/example_*.xlsx
+
+# OS files
+.DS_Store
+
+# Claude Code local settings
+.claude/
