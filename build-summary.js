@@ -13,6 +13,15 @@ const OUTPUT_DIR  = path.join(__dirname, 'output');
 const tripConfig  = JSON.parse(fs.readFileSync(path.join(__dirname, 'trip-config.json'), 'utf-8'));
 const windowDefs  = (tripConfig['даты'] && tripConfig['даты']['окна_вылета']) || [];
 
+const _routeCities = tripConfig['маршрут']['города'];
+const _routeNames  = tripConfig['маршрут']['названия'] || _routeCities;
+const ROUTE_STR    = _routeCities.join('-');          // MOW-TBS-MOW
+const CITY_FROM    = _routeCities[0];                 // MOW
+const CITY_TO      = _routeCities[1];                 // TBS
+const CITY_BACK    = _routeCities[_routeCities.length - 1]; // MOW
+const NAME_FROM    = _routeNames[0];                  // Москва
+const NAME_TO      = _routeNames[1];                  // Тбилиси
+
 // ─── Утилиты дат ─────────────────────────────────────────────────────────────
 
 const _DIM = [0,31,28,31,30,31,30,31,31,30,31,30,31];
@@ -72,7 +81,7 @@ function fmtRub(v) { return v != null ? v.toLocaleString('ru-RU') + ' ₽' : '�
 
 // Для каждой комбинации дат берём только самый свежий файл (по алфавиту = по времени)
 const _allFiles = fs.readdirSync(OUTPUT_DIR)
-    .filter(f => f.match(/^as_\d{4}-\d{4}_MOW-MSQ/) && f.endsWith('.xlsx'))
+    .filter(f => f.match(/^as_\d{4}-\d{4}_/) && f.includes(`_${ROUTE_STR}_`) && f.endsWith('.xlsx'))
     .sort();
 const _latestByKey = {};
 _allFiles.forEach(f => {
@@ -125,9 +134,9 @@ files.forEach(file => {
         allOptions.push({
             '₽': pv, 'Вылет': dk, 'Ноч.': nights,
             'Туда дата': r['Р1 Дата']||'', 'Туда время': r['Р1 Вылет']||'',
-            'Прилёт MSQ': r['Р1 Прилёт']||'',
+            [`Прилёт ${CITY_TO}`]: r['Р1 Прилёт']||'',
             'Обратно дата': r['Р2 Дата']||'', 'Обратно время': r['Р2 Вылет']||'',
-            'Прилёт MOW': r['Р2 Прилёт']||'',
+            [`Прилёт ${CITY_BACK}`]: r['Р2 Прилёт']||'',
         });
     });
 });
@@ -281,7 +290,7 @@ async function build() {
     wsTime.getColumn(SLOTS.length + 3).width = 46;  // Лучший (столбец)
 
     // Заголовок: вылет / обратно / итог
-    const colHeaders = ['Вылет МСК  ╲  Обратно MSQ →', ...SLOTS, 'Лучший → (дешевле всего вернуться)', 'Лучший ↓ (дешевле всего вылететь)'];
+    const colHeaders = [`Вылет ${CITY_FROM}  ╲  Обратно ${CITY_TO} →`, ...SLOTS, 'Лучший → (дешевле всего вернуться)', 'Лучший ↓ (дешевле всего вылететь)'];
     const hRow = wsTime.addRow(colHeaders);
     hRow.eachCell(c => Object.assign(c, styleHeader));
     hRow.height = 22;
@@ -425,7 +434,7 @@ async function build() {
     });
 
     // ── 3. Все варианты ───────────────────────────────────────────────────────
-    const aHeaders = ['₽','Вылет','Ноч.','Туда дата','Туда время','Прилёт MSQ','Обратно дата','Обратно время','Прилёт MOW'];
+    const aHeaders = ['₽','Вылет','Ноч.','Туда дата','Туда время',`Прилёт ${CITY_TO}`,'Обратно дата','Обратно время',`Прилёт ${CITY_BACK}`];
     const ahRow = wsAll.addRow(aHeaders);
     ahRow.eachCell(c => Object.assign(c, styleHeader));
     [12,10,5,10,10,10,12,12,10].forEach((w,i) => wsAll.getColumn(i+1).width = w);
@@ -824,7 +833,7 @@ async function build() {
     wsHelp.getColumn(2).width = 88;
     [
         ['Вкладка', 'Что показывает'],
-        ['По времени вылета', 'Строки = время вылета из Москвы (Ночь/Утро/День/Вечер). Столбцы = время обратного вылета из Минска. Ячейка — минимальная цена. Строка "Лучший ↓" внизу каждой группы = дешевле всего вылететь для этого времени возврата. Столбец "Лучший →" = дешевле всего вернуться для данного времени вылета.'],
+        ['По времени вылета', `Строки = время вылета из ${NAME_FROM} (Ночь/Утро/День/Вечер). Столбцы = время обратного вылета из ${NAME_TO}. Ячейка — минимальная цена. Строка "Лучший ↓" внизу каждой группы = дешевле всего вылететь для этого времени возврата. Столбец "Лучший →" = дешевле всего вернуться для данного времени вылета.`],
         ['По датам', 'Минимальная цена по дате × кол-во ночей. Числа с цветовой шкалой.'],
         ['Все варианты', 'Все рейсы по возрастанию цены. Используй Ctrl+Shift+L (фильтр).'],
         ['Рек - Карточки', 'Детальные карточки на каждый (дата + ночи) вариант. Отсортированы от дешёвого к дорогому. Каждая карточка: диапазон цен, цвет-рейтинг по слотам вылета, итоговый совет.'],
@@ -834,7 +843,7 @@ async function build() {
         ['', ''],
         ['Цены', 'Всё за двух пассажиров туда + обратно. На одного = ÷ 2.'],
         ['MOW', 'Москва (SVO / DME / VKO)'],
-        ['MSQ', 'Минск — Национальный аэропорт'],
+        [CITY_TO, NAME_TO],
         ['Данные', new Date().toLocaleString('ru-RU')],
     ].forEach((row, i) => {
         const r = wsHelp.addRow(row);
