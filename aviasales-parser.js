@@ -32,6 +32,8 @@ function generateFileName(url) {
     // Парсим URL: 3-сегментный MOW2102DXB2502MRU0503MOW2 или 2-сегментный MRU0503IST0503MOW2
     const match3 = url.match(/([A-Z]{3})(\d{4})([A-Z]{3})(\d{4})([A-Z]{3})(\d{4})([A-Z]{3})/);
     const match2 = !match3 && url.match(/\/([A-Z]{3})(\d{4})([A-Z]{3})(\d{4})([A-Z]{3})\d*$/);
+    // Односторонний поиск MOW1508CXR2 — нужен, чтобы сравнивать плечо с плечом
+    const match1 = !match3 && !match2 && url.match(/\/([A-Z]{3})(\d{4})([A-Z]{3})\d*$/);
 
     let dates = 'unknown';
     let route = 'unknown';
@@ -50,6 +52,12 @@ function generateFileName(url) {
         route = `${city1}-${city2}-${city3}`;
         startDate = date1;
         cities = [city1, city2, city3];
+    } else if (match1) {
+        const [, city1, date1, city2] = match1;
+        dates = date1;
+        route = `${city1}-${city2}`;
+        startDate = date1;
+        cities = [city1, city2];
     }
 
     const now = new Date();
@@ -69,6 +77,30 @@ function generateFileName(url) {
     };
 }
 
+/**
+ * Закрывает баннеры, которые Авиасейлс кладёт поверх выдачи.
+ *
+ * Модалку «Ваш браузер устарел» правильный User-Agent убирает совсем, но она
+ * иногда возвращается на переходах, поэтому оставляем и этот проход.
+ * Баннер про куки НЕ трогаем: это согласие, его решает человек.
+ */
+async function dismissOverlays(page) {
+    const closed = await page.evaluate(() => {
+        const labels = ['Продолжить на свой страх и риск', 'Ок', 'Понятно', 'Закрыть'];
+        const hit = [];
+        for (const el of document.querySelectorAll('button, [role="button"], a')) {
+            const text = (el.textContent || '').trim();
+            if (labels.some(l => text === l)) {
+                el.click();
+                hit.push(text);
+            }
+        }
+        return hit;
+    });
+    if (closed.length) console.log(`  ✕ закрыто поверх выдачи: ${closed.join(', ')}`);
+    return closed.length;
+}
+
 // Функция парсинга одной страницы
 async function parseOnePage(page, searchUrl, isFirstUrl) {
     const fileNames = generateFileName(searchUrl);
@@ -80,25 +112,40 @@ async function parseOnePage(page, searchUrl, isFirstUrl) {
 
     await page.goto(searchUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-    // Капча только для первого URL
+    // Капча только для первого URL. Ждём не вслепую, а до появления цен:
+    // без капчи выдача приезжает за пару секунд и спать минуту незачем.
+    // CAPTCHA_WAIT — это потолок ожидания, а не пауза.
     if (isFirstUrl) {
+        const limit = Number(process.env.CAPTCHA_WAIT) || 90;
         console.log('┌' + '─'.repeat(68) + '┐');
-        console.log('│  ⏸️  РЕШИТЕ CAPTCHA В ОТКРЫВШЕМСЯ БРАУЗЕРЕ!                          │');
-        console.log('│                                                                    │');
-        console.log('│  У вас есть 60 секунд на решение captcha и загрузку билетов       │');
+        console.log('│  ⏸️  ЕСЛИ В БРАУЗЕРЕ CAPTCHA — РЕШИТЕ ЕЁ                             │');
+        console.log(`│  Ждём появления билетов, максимум ${String(limit).padEnd(3)} сек, дальше сразу дальше │`);
         console.log('└' + '─'.repeat(68) + '┘\n');
 
-        const waitTime = 60;
-        for (let i = 0; i < waitTime; i += 15) {
-            console.log(`   ⏳ Осталось ~${waitTime - i} секунд...`);
-            await page.waitForTimeout(15000);
+        const started = Date.now();
+        let ready = false;
+        while ((Date.now() - started) / 1000 < limit) {
+            await dismissOverlays(page);
+            const priceCount = await page.evaluate(
+                () => (document.body.textContent.match(/\d{2,6}\s*₽/g) || []).length
+            );
+            if (priceCount > 50) {
+                ready = true;
+                console.log(`✓ Выдача на месте (${priceCount} цен) за ${Math.round((Date.now() - started) / 1000)} сек`);
+                break;
+            }
+            const left = Math.round(limit - (Date.now() - started) / 1000);
+            console.log(`   ⏳ билетов пока нет, ждём ещё ~${left} сек...`);
+            await page.waitForTimeout(3000);
         }
-        console.log('\n✓ Время истекло! Проверяем страницу...');
+        if (!ready) console.log('\n⚠️  Билеты так и не появились — пробуем разобрать что есть.');
     } else {
         // Для следующих URL — короткое ожидание
         console.log('⏳ Ожидание загрузки (8 сек)...');
         await page.waitForTimeout(8000);
     }
+
+    await dismissOverlays(page);
 
     // Быстрая проверка загрузки (макс 5 сек)
     console.log('Проверяем загрузку...');
@@ -114,6 +161,7 @@ async function parseOnePage(page, searchUrl, isFirstUrl) {
     }
 
     // Нажимаем "Показать ещё" (быстро)
+    await dismissOverlays(page);
     console.log('Загружаем все билеты...');
     let showMoreClicks = 0;
 
@@ -482,14 +530,25 @@ async function parseAviasales() {
     } catch (e) {}
 
     console.log('Запуск браузера...\n');
+    // Окно на половину экрана: 1280 — это ещё десктопная вёрстка Авиасейлса.
+    // Уже 1024 сайт переключается на мобильную разметку и селекторы карточек едут.
     const browser = await chromium.launch({
         headless: false,
-        args: ['--start-maximized']
+        args: ['--window-size=1280,1000', '--window-position=0,0']
     });
+
+    // Версию Chrome подставляем настоящую, из самого браузера.
+    // Со старым обрезанным UA (без Chrome/… и Safari/…) Авиасейлс не мог определить
+    // версию и на каждой странице показывал модалку «Ваш браузер устарел».
+    const chromeMajor = (browser.version().match(/(\d+)\./) || [, '140'])[1];
+    const userAgent = 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+        + 'AppleWebKit/537.36 (KHTML, like Gecko) '
+        + `Chrome/${chromeMajor}.0.0.0 Safari/537.36`;
+    console.log(`User-Agent: Chrome ${chromeMajor}\n`);
 
     const context = await browser.newContext({
         viewport: null,
-        userAgent: 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36'
+        userAgent
     });
 
     const page = await context.newPage();
