@@ -261,6 +261,91 @@ async function parseOnePage(page, searchUrl, isFirstUrl) {
 
     console.log(`✓ Найдено билетов: ${tickets.length}`);
 
+    // ── Стыковки ────────────────────────────────────────────────────────────
+    // В карточке длительности пересадки нет — Aviasales показывает её
+    // подсказкой по наведению на код аэропорта. Подсказка рисуется порталом
+    // в конец body, поэтому наводимся на каждый код и читаем оттуда.
+    // Без этого пересадочные рейсы приходилось отбраковывать целиком:
+    // проверить правило «стык не меньше трёх часов» было нечем.
+    const layovers = await page.evaluate(async () => {
+        const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+        // «4 ⁠ч 10 ⁠м» → 250. Между числом и единицей стоит word-joiner U+2060.
+        const toMinutes = (s) => {
+            const t = s.replace(/[⁠ ]/g, ' ');
+            const d = /(\d+)\s*д/.exec(t);
+            const h = /(\d+)\s*ч/.exec(t);
+            const m = /(\d+)\s*м(?!и)/.exec(t);
+            let total = 0;
+            if (d) total += Number(d[1]) * 1440;
+            if (h) total += Number(h[1]) * 60;
+            if (m) total += Number(m[1]);
+            return total || null;
+        };
+
+        // Подсказка — прямой потомок body. Своего data-test-id у неё нет,
+        // а класс генерируется сборкой и меняется от релиза к релизу,
+        // поэтому опознаём по тексту.
+        const readTooltip = () => {
+            for (const el of document.body.children) {
+                const t = (el.textContent || '').trim();
+                if (/пересадк/i.test(t) && /\d/.test(t) && t.length < 300) return t;
+            }
+            return null;
+        };
+
+        const fire = (el, types) => {
+            const r = el.getBoundingClientRect();
+            const opts = { bubbles: true, cancelable: true,
+                           clientX: r.x + r.width / 2, clientY: r.y + r.height / 2 };
+            for (const type of types) el.dispatchEvent(new MouseEvent(type, opts));
+        };
+
+        const out = {};
+        for (const card of document.querySelectorAll('[data-test-id="ticket-preview"]')) {
+            // Точки пересадки — голые span с трёхбуквенным кодом и без класса.
+            // У аэропортов вылета и прилёта класс есть, они сюда не попадают.
+            const hops = Array.from(card.querySelectorAll('span')).filter(
+                (s) => !s.className && /^[A-Z]{3}$/.test((s.textContent || '').trim()));
+            if (!hops.length) continue;
+
+            const legs = [];
+            for (const hop of hops) {
+                hop.scrollIntoView({ block: 'center' });
+                fire(hop, ['pointerover', 'mouseover', 'pointerenter', 'mouseenter', 'mousemove']);
+                let text = null;
+                for (let wait = 0; wait < 5 && !text; wait++) {
+                    await sleep(80);
+                    text = readTooltip();
+                }
+                legs.push({
+                    airport: (hop.textContent || '').trim(),
+                    minutes: text ? toMinutes(text.split('—').pop()) : null,
+                    text: text
+                });
+                fire(hop, ['pointerout', 'mouseout', 'pointerleave', 'mouseleave']);
+                await sleep(40);
+            }
+            const sig = (card.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+            out[sig] = legs;
+        }
+        return out;
+    });
+
+    // Привязываем к билетам по началу rawText: он собирается из того же
+    // textContent карточки, поэтому подписи совпадают.
+    let withLayover = 0;
+    for (const t of tickets) {
+        const legs = layovers[(t.rawText || '').slice(0, 120)];
+        if (legs && legs.length) {
+            t.layovers = legs;
+            t.layoverMin = legs.every((l) => l.minutes) ?
+                Math.min(...legs.map((l) => l.minutes)) : null;
+            withLayover++;
+        }
+    }
+    console.log(`✓ Стыковки прочитаны у ${withLayover} билетов из ${tickets.length}`);
+
     // Сохраняем JSON
     const allDataFile = fileNames.json.replace('.json', '-all.json');
     fs.writeFileSync(allDataFile, JSON.stringify(tickets, null, 2), 'utf-8');
